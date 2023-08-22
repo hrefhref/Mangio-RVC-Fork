@@ -336,8 +336,9 @@ class VC(object):
                 time_step,
             )
 
+        #with open("ftest.txt","w")as f:f.write("\n".join([str(i)for i in f0.tolist()]))
         f0 *= pow(2, f0_up_key / 12)
-        # with open("test.txt","w")as f:f.write("\n".join([str(i)for i in f0.tolist()]))
+        #with open("test.txt","w")as f:f.write("\n".join([str(i)for i in f0.tolist()]))
         tf0 = self.sr // self.window  # 每秒f0点数
         if inp_f0 is not None:
             delta_t = np.round(
@@ -350,7 +351,7 @@ class VC(object):
             f0[self.x_pad * tf0 : self.x_pad * tf0 + len(replace_f0)] = replace_f0[
                 :shape
             ]
-        # with open("test_opt.txt","w")as f:f.write("\n".join([str(i)for i in f0.tolist()]))
+        #with open("test_opt.txt","w")as f:f.write("\n".join([str(i)for i in f0.tolist()]))
         f0bak = f0.copy()
         f0_mel = 1127 * np.log(1 + f0 / 700)
         f0_mel[f0_mel > 0] = (f0_mel[f0_mel > 0] - f0_mel_min) * 254 / (
@@ -464,45 +465,7 @@ class VC(object):
         times[2] += t2 - t1
         return audio1
 
-    def pipeline(
-        self,
-        model,
-        net_g,
-        sid,
-        audio,
-        input_audio_path,
-        times,
-        f0_up_key,
-        f0_method,
-        file_index,
-        # file_big_npy,
-        index_rate,
-        if_f0,
-        filter_radius,
-        tgt_sr,
-        resample_sr,
-        rms_mix_rate,
-        version,
-        protect,
-        crepe_hop_length,
-        f0_file=None,
-    ):
-        if (
-            file_index != ""
-            # and file_big_npy != ""
-            # and os.path.exists(file_big_npy) == True
-            and os.path.exists(file_index) == True
-            and index_rate != 0
-        ):
-            try:
-                index = faiss.read_index(file_index)
-                # big_npy = np.load(file_big_npy)
-                big_npy = index.reconstruct_n(0, index.ntotal)
-            except:
-                traceback.print_exc()
-                index = big_npy = None
-        else:
-            index = big_npy = None
+    def audio_pad(self, audio):
         audio = signal.filtfilt(bh, ah, audio)
         audio_pad = np.pad(audio, (self.window // 2, self.window // 2), mode="reflect")
         opt_ts = []
@@ -519,24 +482,13 @@ class VC(object):
                         == np.abs(audio_sum[t - self.t_query : t + self.t_query]).min()
                     )[0][0]
                 )
-        s = 0
-        audio_opt = []
-        t = None
         t1 = ttime()
         audio_pad = np.pad(audio, (self.t_pad, self.t_pad), mode="reflect")
         p_len = audio_pad.shape[0] // self.window
         inp_f0 = None
-        if hasattr(f0_file, "name") == True:
-            try:
-                with open(f0_file.name, "r") as f:
-                    lines = f.read().strip("\n").split("\n")
-                inp_f0 = []
-                for line in lines:
-                    inp_f0.append([float(i) for i in line.split(",")])
-                inp_f0 = np.array(inp_f0, dtype="float32")
-            except:
-                traceback.print_exc()
-        sid = torch.tensor(sid, device=self.device).unsqueeze(0).long()
+        return (audio_pad, opt_ts, inp_f0, p_len, t1)
+
+    def do_pitch(self, if_f0, input_audio_path, audio_pad, p_len, f0_up_key, f0_method, filter_radius, crepe_hop_length, inp_f0):
         pitch, pitchf = None, None
         if if_f0 == 1:
             pitch, pitchf = self.get_f0(
@@ -556,6 +508,55 @@ class VC(object):
             pitch = torch.tensor(pitch, device=self.device).unsqueeze(0).long()
             pitchf = torch.tensor(pitchf, device=self.device).unsqueeze(0).float()
         t2 = ttime()
+        return (pitch, pitchf, t2)
+
+    def pipeline(
+        self,
+        model,
+        net_g,
+        sid,
+        audio,
+        input_audio_path,
+        times,
+        f0_up_key,
+        f0_method,
+        index,
+        big_npy,
+        index_rate,
+        if_f0,
+        filter_radius,
+        tgt_sr,
+        resample_sr,
+        rms_mix_rate,
+        version,
+        protect,
+        crepe_hop_length,
+        f0_file=None,
+        audio_pad=None,
+        pitch=None
+    ):
+        if audio_pad:
+            (audio_pad, opt_ts, inp_f0, p_len, t1) = audio_pad
+        else:
+            (audio_pad, opt_ts, inp_f0, p_len, t1) = self.audio_pad(audio)
+        if hasattr(f0_file, "name") == True:
+            try:
+                with open(f0_file.name, "r") as f:
+                    lines = f.read().strip("\n").split("\n")
+                inp_f0 = []
+                for line in lines:
+                    inp_f0.append([float(i) for i in line.split(",")])
+                inp_f0 = np.array(inp_f0, dtype="float32")
+            except:
+                traceback.print_exc()
+        sid = torch.tensor(sid, device=self.device).unsqueeze(0).long()
+        s = 0
+        t = None
+        audio_opt = []
+        if pitch:
+            (pitch, pitchf, t2) = pitch
+        else:
+           (pitch, pitchf, t2) = self.do_pitch(if_f0, input_audio_path, audio_pad, p_len, f0_up_key, f0_method, filter_radius, crepe_hop_length, inp_f0)
         times[1] += t2 - t1
         for t in opt_ts:
             t = t // self.window * self.window
@@ -640,7 +641,8 @@ class VC(object):
         if audio_max > 1:
             max_int16 /= audio_max
         audio_opt = (audio_opt * max_int16).astype(np.int16)
-        del pitch, pitchf, sid
+        #del pitch, pitchf, sid
+        del sid
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         return audio_opt

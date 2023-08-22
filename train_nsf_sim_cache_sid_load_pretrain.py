@@ -53,6 +53,7 @@ from process_ckpt import savee
 
 global_step = 0
 
+import wandb
 
 class EpochRecorder:
     def __init__(self):
@@ -68,6 +69,7 @@ class EpochRecorder:
 
 
 def main():
+    wandb.setup()
     n_gpus = torch.cuda.device_count()
     if torch.cuda.is_available() == False and torch.backends.mps.is_available() == True:
         n_gpus = 1
@@ -93,6 +95,7 @@ def main():
 def run(rank, n_gpus, hps):
     global global_step
     if rank == 0:
+        wandb.init(project=os.environ["WANDB"], sync_tensorboard=True)
         logger = utils.get_logger(hps.model_dir)
         logger.info(hps)
         # utils.check_git_hash(hps.model_dir)
@@ -476,6 +479,8 @@ def train_and_evaluate(
                     f"loss_disc={loss_disc:.3f}, loss_gen={loss_gen:.3f}, loss_fm={loss_fm:.3f},loss_mel={loss_mel:.3f}, loss_kl={loss_kl:.3f}"
                 )
                 scalar_dict = {
+                    "global_step": global_step,
+                    "epoch": epoch,
                     "loss/g/total": loss_gen_all,
                     "loss/d/total": loss_disc,
                     "learning_rate": lr,
@@ -512,6 +517,7 @@ def train_and_evaluate(
                 }
                 utils.summarize(
                     writer=writer,
+                    epoch=epoch,
                     global_step=global_step,
                     images=image_dict,
                     scalars=scalar_dict,
